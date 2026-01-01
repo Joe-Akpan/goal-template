@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Goal Planner Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+
+<style>
+body{font-family: Arial;background:#0f172a;margin:0;color:white}
+.container{padding:20px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:15px}
+.card{padding:15px;border-radius:15px;color:white}
+.card h2{margin:5px 0}
+button{padding:6px 10px;border:none;border-radius:7px;margin:4px;cursor:pointer}
+input,select,textarea{width:100%;padding:8px;border-radius:7px;border:none;margin-top:4px}
+.goalBox{background:#00000033;padding:7px;border-radius:10px;margin-top:7px}
+.smallChart{width:100%;height:80px}
+.topchartBox{background:#020617;border-radius:15px;padding:10px;margin-bottom:10px}
+.actionButtons button{background:#1e293b;color:white}
+#passwordPrompt{position:fixed;top:0;left:0;width:100%;height:100%;background:#000d;display:flex;justify-content:center;align-items:center;flex-direction:column;}
+#passwordPrompt input{margin-top:10px;width:200px;padding:8px;border-radius:7px;border:none;text-align:center;}
+</style>
+</head>
+
+<body>
+
+<!-- Password Lock -->
+<div id="passwordPrompt">
+<h2>Enter App Password</h2>
+<input type="password" id="appPassword" placeholder="Password">
+<button onclick="checkPassword()">Unlock</button>
+<p style="font-size:12px;color:#ccc">Default password: 1234 (change in code)</p>
+</div>
+
+<div class="container" id="mainContent" style="display:none;">
+
+<h1>Ultimate Goal Planner</h1>
+
+<div class="actionButtons">
+<button onclick="downloadBackup()">💾 SAVE TO DEVICE</button>
+
+<label style="background:#1e293b;padding:7px 10px;border-radius:7px;cursor:pointer;">
+📤 LOAD FROM DEVICE
+<input type="file" hidden onchange="uploadBackup(event)">
+</label>
+
+<button onclick="exportPDF()">📄 Export PDF</button>
+<button onclick="exportExcel()">📊 Export Excel</button>
+
+<button onclick="clearAll()">🗑 CLEAR EVERYTHING</button>
+</div>
+
+<br>
+
+<div class="topchartBox">
+<canvas id="mainChart" height="100"></canvas>
+</div>
+
+<div class="grid" id="categoryGrid"></div>
+</div>
+
+<script>
+// ===== Password Lock =====
+const PASSWORD = "1234"; 
+function checkPassword(){
+let input = document.getElementById("appPassword").value;
+if(input === PASSWORD){
+document.getElementById("passwordPrompt").style.display="none";
+document.getElementById("mainContent").style.display="block";
+render();
+startReminders();
+startLiveCountdown(); // start live countdown
+}else{
+alert("Incorrect Password");
+}
+}
+
+// ===== Categories & Data =====
+const categories=[
+{name:"Career",color:"#2563eb"},
+{name:"Family",color:"#16a34a"},
+{name:"Finance",color:"#eab308"},
+{name:"Health",color:"#dc2626"},
+{name:"Spiritual",color:"#9333ea"},
+{name:"Personal Dev",color:"#f97316"},
+];
+
+let data=JSON.parse(localStorage.getItem("goalApp"))||categories.map(c=>({...c,goals:[]}));
+
+const grid=document.getElementById("categoryGrid");
+
+// ===== Render Functions =====
+function render(){
+grid.innerHTML="";
+data.forEach((cat,i)=>{
+let div=document.createElement("div");
+div.className="card";
+div.style.background=cat.color;
+
+div.innerHTML=`
+<h2>${cat.name}</h2>
+
+<button onclick="openAdd(${i})">➕ Add Goal</button>
+<button onclick="saveCat()">💾 Save</button>
+<button onclick="clearCat(${i})">🗑 Delete Category Goals</button>
+
+<div id="goalList${i}">
+${cat.goals.map((g,gi)=>goalHTML(g,i,gi)).join("")}
+</div>
+
+<canvas class="smallChart" id="chart${i}"></canvas>
+`;
+
+grid.appendChild(div);
+drawSmallChart(i);
+});
+mainChartUpdate();
+localStorage.setItem("goalApp",JSON.stringify(data));
+updateCountdownDisplay(); // Update countdowns immediately
+}
+
+function goalHTML(g,i,gi){
+return `
+<div class="goalBox">
+<b>${g.title}</b><br>
+Priority: ${g.priority}<br>
+Timeframe: ${g.time}<br>
+Action Plan:<br>${g.action}<br>
+Progress: ${g.progress}%<br>
+Countdown: <span id="cd${i}_${gi}">${formatCountdown(g.time)}</span>
+<br>
+
+<button onclick="markDone(${i},${gi})">✔ Achieved</button>
+<button onclick="markFail(${i},${gi})">❌ Not Achieved</button>
+<button onclick="editGoal(${i},${gi})">✏ Edit</button>
+<button onclick="delGoal(${i},${gi})">🗑 Delete</button>
+</div>
+`;
+}
+
+// ===== Countdown Helper =====
+function formatCountdown(date){
+if(!date) return "N/A";
+let d = new Date(date) - new Date();
+if(d<=0) return "Expired";
+let days = Math.floor(d/86400000);
+let hours = Math.floor((d%86400000)/3600000);
+let mins = Math.floor((d%3600000)/60000);
+let secs = Math.floor((d%60000)/1000);
+return `${days}d ${hours}h ${mins}m ${secs}s`;
+}
+
+function updateCountdownDisplay(){
+data.forEach((cat,i)=>{
+cat.goals.forEach((g,gi)=>{
+let el=document.getElementById(`cd${i}_${gi}`);
+if(el) el.textContent=formatCountdown(g.time);
+});
+});
+}
+
+// Live countdown every second
+function startLiveCountdown(){
+setInterval(updateCountdownDisplay,1000);
+}
+
+// ===== Other Goal Functions =====
+function openAdd(i){
+let title=prompt("Enter Goal");
+if(!title) return;
+let priority=prompt("Priority: Low / Medium / High","");
+let time=prompt("Deadline (YYYY-MM-DD)");
+let action=prompt("Action Plan");
+data[i].goals.push({title,priority,time,action,progress:0});
+render();
+}
+
+function markDone(i,gi){data[i].goals[gi].progress=100;render();}
+function markFail(i,gi){data[i].goals[gi].progress=0;render();}
+function editGoal(i,gi){
+let g=data[i].goals[gi];
+g.title=prompt("Edit Goal",g.title)||g.title;
+g.priority=prompt("Edit Priority",g.priority)||g.priority;
+g.time=prompt("Edit Time",g.time)||g.time;
+g.action=prompt("Edit Action",g.action)||g.action;
+render();
+}
+function delGoal(i,gi){data[i].goals.splice(gi,1);render();}
+function clearCat(i){data[i].goals=[];render();}
+function saveCat(){localStorage.setItem("goalApp",JSON.stringify(data));alert("Saved");}
+
+function avg(arr){if(arr.length==0)return 0;return Math.round(arr.reduce((a,b)=>a+b,0)/arr.length);}
+
+let mainChart;
+function mainChartUpdate(){
+let ctx=document.getElementById("mainChart");
+let values=data.map(c=>avg(c.goals.map(g=>g.progress)));
+if(mainChart) mainChart.destroy();
+mainChart=new Chart(ctx,{
+type:"bar",
+data:{
+labels:data.map(c=>c.name),
+datasets:[{data:values,backgroundColor:data.map(c=>c.color)}]
+},
+options:{scales:{y:{min:0,max:100}}}
+});
+}
+
+function drawSmallChart(i){
+let ctx=document.getElementById("chart"+i);
+let vals=data[i].goals.map(g=>g.progress);
+new Chart(ctx,{
+type:"bar",
+data:{
+labels:data[i].goals.map((g,gi)=>"G"+(gi+1)),
+datasets:[{data:vals,background:"#fff"}]
+},
+options:{scales:{y:{min:0,max:100}},plugins:{legend:{display:false}}}
+});
+}
+
+// ---------- SAVE & LOAD ----------
+function downloadBackup(){
+const blob=new Blob([JSON.stringify(data)],{type:"application/json"});
+const url=URL.createObjectURL(blob);
+const a=document.createElement("a");
+a.href=url;
+a.download="My_Goals_Backup.json";
+a.click();
+URL.revokeObjectURL(url);
+alert("Backup saved to your device.");
+}
+function uploadBackup(event){
+let file=event.target.files[0];
+if(!file)return;
+let reader=new FileReader();
+reader.onload=e=>{
+try{data=JSON.parse(e.target.result);render();alert("Backup restored!");}catch{alert("Invalid file");}
+};
+reader.readAsText(file);
+}
+function clearAll(){if(confirm("Delete EVERYTHING?")){localStorage.removeItem("goalApp");location.reload();}}
+
+// ---------- EXPORT PDF & EXCEL ----------
+async function exportPDF(){
+const { jsPDF } = window.jspdf;
+const pdf = new jsPDF("p","mm","a4");
+const content = document.querySelector(".container");
+await html2canvas(content,{scale:2}).then(canvas=>{
+const imgData = canvas.toDataURL("image/png");
+let width = 210;
+let height = (canvas.height * width) / canvas.width;
+pdf.addImage(imgData,"PNG",0,0,width,height);
+pdf.save("My_Goals_Print.pdf");
+});
+alert("PDF Saved!");
+}
+function exportExcel(){
+let exportData=[];
+data.forEach(cat=>{
+cat.goals.forEach(g=>{
+exportData.push({Category:cat.name,Goal:g.title,Priority:g.priority,Deadline:g.time,Action:g.action,Progress:g.progress+"%"});
+});
+});
+let sheet=XLSX.utils.json_to_sheet(exportData);
+let book=XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(book,sheet,"Goals");
+XLSX.writeFile(book,"My_Goals.xlsx");
+alert("Excel Exported!");
+}
+
+// ===== Automatic Goal Reminders =====
+function startReminders(){
+if(!("Notification" in window)){console.log("Browser does not support notifications."); return;}
+Notification.requestPermission();
+
+setInterval(()=>{
+data.forEach(cat=>{
+cat.goals.forEach(g=>{
+if(g.progress<100 && g.time){
+let d = new Date(g.time) - new Date();
+let days = Math.floor(d/86400000);
+if(days <=1 && days>=0){ // 1 day before deadline
+new Notification("Goal Reminder",{
+body:`"${g.title}" in category "${cat.name}" is due in ${days} day(s)!`,
+icon:"https://img.icons8.com/fluency/48/000000/todo-list.png"
+});
+}
+}
+});
+});
+},3600000); // every 1 hour
+}
+</script>
+
+</body>
+</html>
